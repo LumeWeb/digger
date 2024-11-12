@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/diggerhq/digger/libs/ci"
 	"github.com/diggerhq/digger/libs/comment_utils/utils"
 	"github.com/diggerhq/digger/libs/locking/aws"
@@ -303,6 +304,19 @@ func GetLock() (Lock, error) {
 		return &lock, nil
 	} else if lockProvider == "azure" {
 		return azure.NewStorageAccountLock()
+	} else if lockProvider == "s3" {
+		bucketName := os.Getenv("S3_LOCK_BUCKET")
+		if bucketName == "" {
+			return nil, errors.New("S3_LOCK_BUCKET environment variable must be set")
+		}
+
+		cfg, err := config.LoadDefaultConfig(context.Background())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load AWS config: %v", err)
+		}
+
+		s3Client := s3.NewFromConfig(cfg)
+		return aws.NewS3Lock(s3Client, bucketName)
 	}
 
 	return nil, errors.New("failed to find lock provider")
