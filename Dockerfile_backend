@@ -13,6 +13,7 @@ COPY . .
 
 # Get the vendor library and version
 RUN go version
+ENV GOWORK=off
 RUN go mod download
 RUN go mod vendor
 
