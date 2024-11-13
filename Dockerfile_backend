@@ -2,7 +2,7 @@ FROM golang:1.22 as builder
 ARG COMMIT_SHA
 RUN echo "commit sha: ${COMMIT_SHA}"
 
-# Set the working directory
+# Set the working directory and ensure we're in the right directory structure
 WORKDIR $GOPATH/src/github.com/diggerhq/digger
 
 # Install Delve debugger
@@ -11,14 +11,19 @@ RUN go install github.com/go-delve/delve/cmd/dlv@latest
 # Copy all required source, blacklist files that are not required through `.dockerignore`
 COPY . .
 
+# Debug step - let's see what we have
+RUN pwd && ls -la && ls -la backend/
+
 # Get the vendor library and version
 RUN go version
 ENV GOWORK=off
+# Run these from the backend directory
+WORKDIR $GOPATH/src/github.com/diggerhq/digger/backend
 RUN go mod download
 RUN go mod vendor
 
 # Build with debug symbols instead of optimizations
-RUN go build -mod=vendor -gcflags="all=-N -l" -ldflags="-X 'main.Version=${COMMIT_SHA}'" -o backend_exe ./backend/
+RUN go build -mod=vendor -gcflags="all=-N -l" -ldflags="-X 'main.Version=${COMMIT_SHA}'" -o backend_exe .
 
 # Multi-stage build will just copy the binary to an alpine image.
 FROM ubuntu:24.04 as runner
@@ -41,10 +46,10 @@ COPY --from=builder /go/bin/dlv /usr/local/bin/dlv
 EXPOSE 3000 40000
 
 # Copy the binary and source code for debugging
-COPY --from=builder /go/src/github.com/diggerhq/digger/backend_exe /app/backend
+COPY --from=builder /go/src/github.com/diggerhq/digger/backend/backend_exe /app/backend
 COPY --from=builder /go/src/github.com/diggerhq/digger/backend/scripts/entrypoint.sh /app/entrypoint.sh
 COPY --from=builder /go/src/github.com/diggerhq/digger/backend/migrations /app/migrations
-COPY --from=builder /go/src/github.com/diggerhq/digger/vendor /app/vendor
+COPY --from=builder /go/src/github.com/diggerhq/digger/backend/vendor /app/vendor
 ADD backend/templates ./templates
 
 # Create debug entrypoint script
