@@ -11,16 +11,13 @@ RUN go install github.com/go-delve/delve/cmd/dlv@latest
 # Copy all required source, blacklist files that are not required through `.dockerignore`
 COPY . .
 
-# Get the vendor dependencies - disable workspace mode
-ENV GOWORK=off
-RUN go mod vendor
-
+# Get the vendor library
 RUN go version
 
-# Build with debugging symbols
+# Build with debug symbols instead of optimizations
 RUN go build -gcflags="all=-N -l" -ldflags="-X 'main.Version=${COMMIT_SHA}'" -o backend_exe ./backend/
 
-# Multi-stage build will just copy the binary to an ubuntu image
+# Multi-stage build will just copy the binary to an alpine image.
 FROM ubuntu:24.04 as runner
 ENV ATLAS_VERSION v0.28.0
 ARG COMMIT_SHA
@@ -40,14 +37,11 @@ COPY --from=builder /go/bin/dlv /usr/local/bin/dlv
 # Expose the application and debugger ports
 EXPOSE 3000 40000
 
-# Copy the binary and other required files
+# Copy the binary to the corresponding folder
 COPY --from=builder /go/src/github.com/diggerhq/digger/backend_exe /app/backend
 COPY --from=builder /go/src/github.com/diggerhq/digger/backend/scripts/entrypoint.sh /app/entrypoint.sh
 COPY --from=builder /go/src/github.com/diggerhq/digger/backend/migrations /app/migrations
 ADD backend/templates ./templates
-
-# Copy vendor directory for debugging
-COPY --from=builder /go/src/github.com/diggerhq/digger/vendor /app/vendor
 
 # Create debug entrypoint script
 RUN printf '#!/bin/bash\n\
