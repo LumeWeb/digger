@@ -48,30 +48,29 @@ ADD backend/templates ./templates
 # Copy vendor directory for debugging
 COPY --from=builder /go/src/github.com/diggerhq/digger/vendor /app/vendor
 
-# Create a modified debug entrypoint script
-RUN echo '#!/bin/bash
-set -e
-
-if [[ "${DEBUG}" == "true" ]]; then
-    # Run migrations first without debugging
-    cd /app
-    if [[ -z "${BASELINE_MIGRATION}" ]]; then
-        if [[ "${ALLOW_DIRTY}" == "true" ]]; then
-            atlas migrate apply --url $DATABASE_URL --allow-dirty
-        else
-            atlas migrate apply --url $DATABASE_URL
-        fi
-    else
-        atlas migrate apply --url $DATABASE_URL --baseline $BASELINE_MIGRATION
-    fi
-
-    # Then debug only the backend
-    exec dlv debug --headless --listen=:40000 --api-version=2 --accept-multiclient --continue /app/backend
-else
-    # Normal execution
-    exec /app/entrypoint.sh
-fi' > /app/debug-entrypoint.sh \
-    && chmod +x /app/debug-entrypoint.sh
+# Create debug entrypoint script
+RUN printf '#!/bin/bash\n\
+set -e\n\
+\n\
+if [[ "${DEBUG}" == "true" ]]; then\n\
+    # Run migrations first without debugging\n\
+    cd /app\n\
+    if [[ -z "${BASELINE_MIGRATION}" ]]; then\n\
+        if [[ "${ALLOW_DIRTY}" == "true" ]]; then\n\
+            atlas migrate apply --url $DATABASE_URL --allow-dirty\n\
+        else\n\
+            atlas migrate apply --url $DATABASE_URL\n\
+        fi\n\
+    else\n\
+        atlas migrate apply --url $DATABASE_URL --baseline $BASELINE_MIGRATION\n\
+    fi\n\
+    \n\
+    # Then debug only the backend\n\
+    exec dlv debug --headless --listen=:40000 --api-version=2 --accept-multiclient --continue /app/backend\n\
+else\n\
+    # Normal execution\n\
+    exec /app/entrypoint.sh\n\
+fi' > /app/debug-entrypoint.sh && chmod +x /app/debug-entrypoint.sh
 
 # Use the new entrypoint script
 ENTRYPOINT ["/app/debug-entrypoint.sh"]
