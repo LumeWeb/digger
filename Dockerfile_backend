@@ -11,11 +11,13 @@ RUN go install github.com/go-delve/delve/cmd/dlv@latest
 # Copy all required source, blacklist files that are not required through `.dockerignore`
 COPY . .
 
-# Get the vendor library
+# Get the vendor library and version
 RUN go version
+RUN go mod download
+RUN go mod vendor
 
 # Build with debug symbols instead of optimizations
-RUN go build -gcflags="all=-N -l" -ldflags="-X 'main.Version=${COMMIT_SHA}'" -o backend_exe ./backend/
+RUN go build -mod=vendor -gcflags="all=-N -l" -ldflags="-X 'main.Version=${COMMIT_SHA}'" -o backend_exe ./backend/
 
 # Multi-stage build will just copy the binary to an alpine image.
 FROM ubuntu:24.04 as runner
@@ -37,10 +39,11 @@ COPY --from=builder /go/bin/dlv /usr/local/bin/dlv
 # Expose the application and debugger ports
 EXPOSE 3000 40000
 
-# Copy the binary to the corresponding folder
+# Copy the binary and source code for debugging
 COPY --from=builder /go/src/github.com/diggerhq/digger/backend_exe /app/backend
 COPY --from=builder /go/src/github.com/diggerhq/digger/backend/scripts/entrypoint.sh /app/entrypoint.sh
 COPY --from=builder /go/src/github.com/diggerhq/digger/backend/migrations /app/migrations
+COPY --from=builder /go/src/github.com/diggerhq/digger/vendor /app/vendor
 ADD backend/templates ./templates
 
 # Create debug entrypoint script
@@ -61,7 +64,7 @@ if [[ "${DEBUG}" == "true" ]]; then\n\
     fi\n\
     \n\
     # Then debug only the backend\n\
-    exec dlv debug --headless --listen=:40000 --api-version=2 --accept-multiclient --continue /app/backend\n\
+    cd /app && exec dlv debug --headless --listen=:40000 --api-version=2 --accept-multiclient --continue\n\
 else\n\
     # Normal execution\n\
     exec /app/entrypoint.sh\n\
