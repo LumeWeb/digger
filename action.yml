@@ -242,14 +242,6 @@ runs:
         aws-region: ${{ inputs.aws-region }}
       if: ${{ inputs.setup-aws == 'true' && inputs.aws-role-to-assume != '' }}
 
-    - name: Configure OIDC Azure credentials
-      uses: azure/login@v2.1.1
-      with:
-        client-id: ${{ inputs.azure-client-id }}
-        tenant-id: ${{ inputs.azure-tenant-id }}
-        subscription-id: ${{ inputs.azure-subscription-id }}
-      if: ${{ inputs.setup-azure == 'true' && inputs.azure-client-id != '' }}
-
     - uses: actions/cache/restore@v4
       id: restore_cache
       name: restore_cache
