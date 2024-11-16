@@ -30,6 +30,37 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Download Digger Binary
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const os = process.env.RUNNER_OS.toLowerCase();
+          const arch = process.env.RUNNER_ARCH.replace('X64', 'amd64').replace('ARM64', 'arm64');
+          const assetName = `digger-cli-${os}-${arch}${os === 'windows' ? '.exe' : ''}`;
+          
+          const release = await github.rest.repos.getReleaseByTag({
+            owner: 'diggerhq',
+            repo: 'digger',
+            tag: process.env.DIGGER_VERSION
+          });
+          
+          const asset = release.data.assets.find(a => a.name === assetName);
+          if (!asset) throw new Error(`Could not find asset: ${assetName}`);
+          
+          const download = await github.rest.repos.getReleaseAsset({
+            owner: 'diggerhq',
+            repo: 'digger',
+            asset_id: asset.id,
+            headers: {
+              accept: 'application/octet-stream'
+            }
+          });
+          
+          require('fs').writeFileSync('digger', Buffer.from(download.data));
+          require('fs').chmodSync('digger', '755');
+      env:
+        DIGGER_VERSION: ${{ inputs.digger-version }}
+
     - name: Run Digger
       shell: bash
       env:
@@ -40,20 +71,4 @@ runs:
         AWS_S3_BUCKET: ${{ inputs.aws-bucket }}
         DIGGER_RUN_SPEC: ${{ inputs.digger-spec }}
         NO_BACKEND: 'true'
-      run: |
-        # Determine OS and architecture
-        OS=$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')
-        ARCH=$(echo "$RUNNER_ARCH" | sed 's/X64/amd64/g' | sed 's/ARM64/arm64/g')
-        
-        # Download appropriate binary
-        BINARY_URL="https://github.com/diggerhq/digger/releases/download/${{ inputs.digger-version }}/digger-cli-${OS}-${ARCH}"
-        if [ "$OS" = "windows" ]; then
-          BINARY_URL="${BINARY_URL}.exe"
-        fi
-        
-        echo "Downloading from: $BINARY_URL"
-        curl -L "$BINARY_URL" -o digger
-        chmod +x digger
-        
-        # Run digger
-        ./digger
+      run: ./digger
