@@ -24,8 +24,7 @@ inputs:
     required: true
   digger-version:
     description: Version of digger to use (must match a release tag)
-    required: false
-    default: 'v0.3.5'
+    required: true
 
 runs:
   using: composite
