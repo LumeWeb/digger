@@ -30,8 +30,16 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Download Digger CLI
+    - name: Run Digger
       shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+        AWS_ENDPOINT_URL: ${{ inputs.aws-endpoint-url }}
+        AWS_REGION: ${{ inputs.aws-region }}
+        AWS_S3_BUCKET: ${{ inputs.aws-bucket }}
+        DIGGER_RUN_SPEC: ${{ inputs.digger-spec }}
+        NO_BACKEND: 'true'
       run: |
         # Determine OS and architecture
         OS=$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')
@@ -47,26 +55,5 @@ runs:
         curl -L "$BINARY_URL" -o digger
         chmod +x digger
         
-        # Add to PATH
-        echo "$GITHUB_WORKSPACE" >> $GITHUB_PATH
-
-    - name: Run Digger
-      shell: bash
-      env:
-        AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
-        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
-        AWS_ENDPOINT_URL: ${{ inputs.aws-endpoint-url }}
-        AWS_REGION: ${{ inputs.aws-region }}
-        AWS_S3_BUCKET: ${{ inputs.aws-bucket }}
-      run: |
-        # Run Digger with minimal configuration
-        SPEC_ARG=""
-        if [ ! -z "${{ inputs.digger-spec }}" ]; then
-          SPEC_ARG="--spec ${{ inputs.digger-spec }}"
-        fi
-        
-        ./digger $SPEC_ARG
-
-branding:
-  icon: terminal
-  color: purple
+        # Run digger
+        ./digger
