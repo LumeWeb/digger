@@ -29,6 +29,11 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Setup OpenTofu
+      uses: opentofu/setup-opentofu@v1.0.3
+      with:
+        tofu_version: ${{ inputs.opentofu-version }}
+        tofu_wrapper: false
     - name: Download Digger Binary
       uses: actions/github-script@v7
       with:
