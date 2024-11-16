@@ -25,7 +25,7 @@ inputs:
   digger-version:
     description: Version of digger to use (must match a release tag)
     required: false
-    default: 'v0.6.62'  # Update this to latest stable version
+    default: 'v0.3.5'
 
 runs:
   using: composite
@@ -50,33 +50,22 @@ runs:
         # Add to PATH
         echo "$GITHUB_WORKSPACE" >> $GITHUB_PATH
 
-    - name: Setup OpenTofu
-      uses: opentofu/setup-opentofu@v1.0.3
-      with:
-        tofu_version: v1.6.1
-        tofu_wrapper: false
-
-    - name: Configure AWS Credentials
+    - name: Run Digger
       shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+        AWS_ENDPOINT_URL: ${{ inputs.aws-endpoint-url }}
+        AWS_REGION: ${{ inputs.aws-region }}
+        AWS_S3_BUCKET: ${{ inputs.aws-bucket }}
       run: |
-        # Set AWS credentials as environment variables
-        export AWS_ACCESS_KEY_ID='${{ inputs.aws-access-key-id }}'
-        export AWS_SECRET_ACCESS_KEY='${{ inputs.aws-secret-access-key }}'
-        export AWS_ENDPOINT_URL='${{ inputs.aws-endpoint-url }}'
-        export AWS_REGION='${{ inputs.aws-region }}'
-        
         # Run Digger with minimal configuration
-        digger_args=(
-          --no-backend
-          --upload-destination aws
-          --s3-bucket "${{ inputs.aws-bucket }}"
-        )
-        
+        SPEC_ARG=""
         if [ ! -z "${{ inputs.digger-spec }}" ]; then
-          digger_args+=("--spec" "${{ inputs.digger-spec }}")
+          SPEC_ARG="--spec ${{ inputs.digger-spec }}"
         fi
         
-        ./digger "${digger_args[@]}"
+        ./digger $SPEC_ARG
 
 branding:
   icon: terminal
