@@ -69,5 +69,4 @@ runs:
         AWS_REGION: ${{ inputs.aws-region }}
         AWS_S3_BUCKET: ${{ inputs.aws-bucket }}
         DIGGER_RUN_SPEC: ${{ inputs.digger-spec }}
-        NO_BACKEND: 'true'
       run: ./digger
