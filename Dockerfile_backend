@@ -31,7 +31,7 @@ ARG COMMIT_SHA
 WORKDIR /app
 
 # Install Go in the runner stage
-ENV GOLANG_VERSION=1.22.0
+ENV GOLANG_VERSION=1.22
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
@@ -40,10 +40,11 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean all \
     && rm -rf /var/lib/apt/lists/*
 
-# Download and install Go with the correct version format
-RUN curl -fsSL https://golang.org/dl/go${GOLANG_VERSION}.linux-amd64.tar.gz -o golang.tar.gz \
-    && tar -C /usr/local -xzf golang.tar.gz \
-    && rm golang.tar.gz
+# Download and install Go
+RUN curl -O https://dl.google.com/go/go${GOLANG_VERSION}.linux-amd64.tar.gz \
+    && tar -C /usr/local -xzf go${GOLANG_VERSION}.linux-amd64.tar.gz \
+    && rm go${GOLANG_VERSION}.linux-amd64.tar.gz
+
 # Set Go environment variables
 ENV PATH=$PATH:/usr/local/go/bin
 ENV GOPATH=/go
