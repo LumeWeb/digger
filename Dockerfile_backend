@@ -25,32 +25,13 @@ RUN go mod vendor
 # Build with debug symbols instead of optimizations
 RUN go build -mod=vendor -gcflags="all=-N -l" -ldflags="-X 'main.Version=${COMMIT_SHA}'" -o backend_exe .
 
+# Multi-stage build will just copy the binary to an alpine image.
 FROM ubuntu:24.04 as runner
 ENV ATLAS_VERSION v0.28.0
 ARG COMMIT_SHA
 WORKDIR /app
 
-# Install Go in the runner stage
-ENV GOLANG_VERSION=1.22
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    curl \
-    git \
-    wget \
-    && apt-get clean all \
-    && rm -rf /var/lib/apt/lists/*
-
-# Download and install Go
-RUN curl -O https://dl.google.com/go/go${GOLANG_VERSION}.linux-amd64.tar.gz \
-    && tar -C /usr/local -xzf go${GOLANG_VERSION}.linux-amd64.tar.gz \
-    && rm go${GOLANG_VERSION}.linux-amd64.tar.gz
-
-# Set Go environment variables
-ENV PATH=$PATH:/usr/local/go/bin
-ENV GOPATH=/go
-ENV GOBIN=$GOPATH/bin
-ENV PATH=$PATH:$GOBIN
-
+RUN apt-get update && apt-get install -y ca-certificates curl git && apt-get clean all
 RUN update-ca-certificates
 
 RUN echo "commit sha: ${COMMIT_SHA}"
