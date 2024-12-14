@@ -25,14 +25,13 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gruntwork-io/go-commons v0.17.1
 	github.com/gruntwork-io/terragrunt v0.54.11
-	github.com/hashicorp/go-getter v1.7.1
-	github.com/hashicorp/go-getter/v2 v2.2.3
+	github.com/hashicorp/go-getter v1.7.4
 	github.com/hashicorp/hcl/v2 v2.20.1
 	github.com/hashicorp/terraform-config-inspect v0.0.0-20240509232506-4708120f8f30
 	github.com/hashicorp/terraform-json v0.22.1
 	github.com/microsoft/azure-devops-go-api/azuredevops v1.0.0-b5
 	github.com/open-policy-agent/opa v0.66.0
-	github.com/samber/lo v1.39.0
+	github.com/samber/lo v1.46.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.9.0
 	github.com/xanzy/go-gitlab v0.106.0
@@ -239,13 +238,13 @@ require (
 	go.uber.org/atomic v1.9.0 // indirect
 	golang.org/x/crypto v0.28.0 // indirect
 	golang.org/x/exp v0.0.0-20240531132922-fd00a4e0eefc // indirect
-	golang.org/x/mod v0.17.0 // indirect
+	golang.org/x/mod v0.20.0 // indirect
 	golang.org/x/net v0.30.0 // indirect
-	golang.org/x/oauth2 v0.23.0 // indirect
+	golang.org/x/oauth2 v0.24.0 // indirect
 	golang.org/x/sys v0.26.0 // indirect
 	golang.org/x/term v0.25.0 // indirect
 	golang.org/x/time v0.7.0 // indirect
-	golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d // indirect
+	golang.org/x/tools v0.24.0 // indirect
 	google.golang.org/api v0.203.0 // indirect
 	google.golang.org/genproto v0.0.0-20241015192408-796eee8c2d53 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20241007155032-5fefd90f89a9 // indirect
