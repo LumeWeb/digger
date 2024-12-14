@@ -71,7 +71,7 @@ if [[ "${DEBUG}" == "true" ]]; then\n\
     fi\n\
     \n\
     # Then debug only the backend\n\
-    cd /app && exec dlv debug --headless --listen=:40000 --api-version=2 --accept-multiclient --continue\n\
+    cd /app && exec dlv debug --headless --listen=:40000 --api-version=2 --accept-multiclient \n\
 else\n\
     # Normal execution\n\
     exec /app/entrypoint.sh\n\
