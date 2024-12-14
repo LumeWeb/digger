@@ -6,17 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
-	"math/rand"
-	"net/http"
-	"net/url"
-	"os"
-	"path"
-	"reflect"
-	"strconv"
-	"strings"
-
+	"github.com/davecgh/go-spew/spew"
 	"github.com/diggerhq/digger/backend/ci_backends"
+	config2 "github.com/diggerhq/digger/backend/config"
 	"github.com/diggerhq/digger/backend/locking"
 	"github.com/diggerhq/digger/backend/segment"
 	"github.com/diggerhq/digger/backend/services"
@@ -27,6 +19,16 @@ import (
 	orchestrator_scheduler "github.com/diggerhq/digger/libs/scheduler"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"log"
+	"math/rand"
+	"net/http"
+	"net/url"
+	"os"
+	"path"
+	"reflect"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/diggerhq/digger/backend/middleware"
 	"github.com/diggerhq/digger/backend/models"
@@ -54,7 +56,7 @@ func (d DiggerController) GithubAppWebHook(c *gin.Context) {
 	log.Printf("GithubAppWebHook")
 
 	appID := c.GetHeader("X-GitHub-Hook-Installation-Target-ID")
-	log.Printf("app id from header is: %v", appID)
+
 	_, _, webhookSecret, _, err := d.GithubClientProvider.FetchCredentials(appID)
 
 	payload, err := github.ValidatePayload(c.Request, []byte(webhookSecret))
@@ -96,35 +98,16 @@ func (d DiggerController) GithubAppWebHook(c *gin.Context) {
 			c.String(http.StatusOK, "OK")
 			return
 		}
-		err = handleIssueCommentEvent(gh, event, d.CiBackendProvider, appId64)
-		if err != nil {
-			log.Printf("handleIssueCommentEvent error: %v", err)
-			c.String(http.StatusAccepted, err.Error())
-			return
-		}
-
-		log.Printf("executing issue comment event post hooks:")
-		for _, hook := range d.GithubWebhookPostIssueCommentHooks {
-			err := hook(gh, event, d.CiBackendProvider)
-			if err != nil {
-				log.Printf("handleIssueCommentEvent post hook error: %v", err)
-				c.String(http.StatusAccepted, err.Error())
-				return
-			}
-		}
+		go handleIssueCommentEvent(gh, event, d.CiBackendProvider, appId64, d.GithubWebhookPostIssueCommentHooks)
 	case *github.PullRequestEvent:
 		log.Printf("Got pull request event for %d", *event.PullRequest.ID)
-		err = handlePullRequestEvent(gh, event, d.CiBackendProvider, appId64)
-		if err != nil {
-			log.Printf("handlePullRequestEvent error: %v", err)
-			c.String(http.StatusAccepted, err.Error())
-			return
-		}
+		// run it as a goroutine to avoid timeouts
+		go handlePullRequestEvent(gh, event, d.CiBackendProvider, appId64)
 	default:
 		log.Printf("Unhandled event, event type %v", reflect.TypeOf(event))
 	}
 
-	c.JSON(200, "ok")
+	c.JSON(http.StatusAccepted, "ok")
 }
 
 func GithubAppSetup(c *gin.Context) {
@@ -336,6 +319,10 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 	commitSha := payload.PullRequest.Head.GetSHA()
 	branch := payload.PullRequest.Head.GetRef()
 	action := *payload.Action
+	labels := payload.PullRequest.Labels
+	prLabelsStr := lo.Map(labels, func(label *github.Label, i int) string {
+		return *label.Name
+	})
 
 	link, err := models.DB.GetGithubAppInstallationLink(installationId)
 	if err != nil {
@@ -372,6 +359,11 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 		}
 	}
 
+	if !slices.Contains([]string{"closed", "opened", "reopened", "synchronize", "converted_to_draft"}, action) {
+		log.Printf("The action %v is not one that we should act on, ignoring webhook event", action)
+		return nil
+	}
+
 	commentReporterManager := utils.InitCommentReporterManager(ghService, prNumber)
 	if _, exists := os.LookupEnv("DIGGER_REPORT_BEFORE_LOADING_CONFIG"); exists {
 		_, err := commentReporterManager.UpdateComment(":construction_worker: Digger starting....")
@@ -381,9 +373,10 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 		}
 	}
 
-	diggerYmlStr, ghService, config, projectsGraph, _, _, err := getDiggerConfigForPR(gh, installationId, repoFullName, repoOwner, repoName, cloneURL, prNumber)
+	diggerYmlStr, ghService, config, projectsGraph, _, _, changedFiles, err := getDiggerConfigForPR(gh, organisationId, prLabelsStr, installationId, repoFullName, repoOwner, repoName, cloneURL, prNumber)
 	if err != nil {
 		log.Printf("getDiggerConfigForPR error: %v", err)
+		commentReporterManager.UpdateComment(fmt.Sprintf(":x: Error loading digger config: %v", err))
 		return fmt.Errorf("error getting digger config")
 	}
 
@@ -410,6 +403,23 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 		return nil
 	}
 
+	// if flag set we dont allow more projects impacted than the number of changed files in PR (safety check)
+	if config2.LimitByNumOfFilesChanged() {
+		if len(impactedProjects) > len(changedFiles) {
+			log.Printf("Error the number impacted projects %v exceeds number of changed files: %v", len(impactedProjects), len(changedFiles))
+			commentReporterManager.UpdateComment(fmt.Sprintf(":x: Error the number impacted projects %v exceeds number of changed files: %v", len(impactedProjects), len(changedFiles)))
+			log.Printf("Information about the event:")
+			log.Printf("GH payload: %v", payload)
+			log.Printf("PR changed files: %v", changedFiles)
+			log.Printf("digger.yml STR: %v", diggerYmlStr)
+			log.Printf("Parsed config: %v", config)
+			log.Printf("Dependency graph:")
+			spew.Dump(projectsGraph)
+			log.Printf("Impacted Projects: %v", impactedProjects)
+			log.Printf("Impacted Project jobs: %v", jobsForImpactedProjects)
+			return fmt.Errorf("error processing event")
+		}
+	}
 	diggerCommand, err := orchestrator_scheduler.GetCommandFromJob(jobsForImpactedProjects[0])
 	if err != nil {
 		log.Printf("could not determine digger command from job: %v", jobsForImpactedProjects[0].Commands)
@@ -563,7 +573,7 @@ func GetDiggerConfigForBranch(gh utils.GithubClientProvider, installationId int6
 	var diggerYmlStr string
 	var dependencyGraph graph.Graph[string, dg_configuration.Project]
 
-	err = utils.CloneGitRepoAndDoAction(cloneUrl, branch, *token, func(dir string) error {
+	err = utils.CloneGitRepoAndDoAction(cloneUrl, branch, "", *token, func(dir string) error {
 		diggerYmlBytes, err := os.ReadFile(path.Join(dir, "digger.yml"))
 		diggerYmlStr = string(diggerYmlBytes)
 		config, _, dependencyGraph, err = dg_configuration.LoadDiggerConfig(dir, true, changedFiles)
@@ -583,34 +593,66 @@ func GetDiggerConfigForBranch(gh utils.GithubClientProvider, installationId int6
 }
 
 // TODO: Refactor this func to receive ghService as input
-func getDiggerConfigForPR(gh utils.GithubClientProvider, installationId int64, repoFullName string, repoOwner string, repoName string, cloneUrl string, prNumber int) (string, *dg_github.GithubService, *dg_configuration.DiggerConfig, graph.Graph[string, dg_configuration.Project], *string, *string, error) {
+func getDiggerConfigForPR(gh utils.GithubClientProvider, orgId uint, prLabels []string, installationId int64, repoFullName string, repoOwner string, repoName string, cloneUrl string, prNumber int) (string, *dg_github.GithubService, *dg_configuration.DiggerConfig, graph.Graph[string, dg_configuration.Project], *string, *string, []string, error) {
 	ghService, _, err := utils.GetGithubService(gh, installationId, repoFullName, repoOwner, repoName)
 	if err != nil {
 		log.Printf("Error getting github service: %v", err)
-		return "", nil, nil, nil, nil, nil, fmt.Errorf("error getting github service")
+		return "", nil, nil, nil, nil, nil, nil, fmt.Errorf("error getting github service")
 	}
 
 	var prBranch string
 	prBranch, prCommitSha, err := ghService.GetBranchName(prNumber)
 	if err != nil {
 		log.Printf("Error getting branch name: %v", err)
-		return "", nil, nil, nil, nil, nil, fmt.Errorf("error getting branch name")
+		return "", nil, nil, nil, nil, nil, nil, fmt.Errorf("error getting branch name")
 	}
 
 	changedFiles, err := ghService.GetChangedFiles(prNumber)
 	if err != nil {
 		log.Printf("Error getting changed files: %v", err)
-		return "", nil, nil, nil, nil, nil, fmt.Errorf("error getting changed files")
+		return "", nil, nil, nil, nil, nil, nil, fmt.Errorf("error getting changed files")
+	}
+
+	// check if items should be loaded from cache
+	if val, _ := os.LookupEnv("DIGGER_CONFIG_REPO_CACHE_ENABLED"); val == "1" && !slices.Contains(prLabels, "digger:no-cache") {
+		diggerYmlStr, config, dependencyGraph, err := retrieveConfigFromCache(orgId, repoFullName)
+		if err != nil {
+			log.Printf("could not load from cache")
+		} else {
+			log.Printf("successfully loaded from cache")
+			return diggerYmlStr, ghService, config, *dependencyGraph, &prBranch, &prCommitSha, changedFiles, nil
+		}
 	}
 
 	diggerYmlStr, ghService, config, dependencyGraph, err := GetDiggerConfigForBranch(gh, installationId, repoFullName, repoOwner, repoName, cloneUrl, prBranch, changedFiles)
 	if err != nil {
 		log.Printf("Error loading digger.yml: %v", err)
-		return "", nil, nil, nil, nil, nil, fmt.Errorf("error loading digger.yml: %v", err)
+		return "", nil, nil, nil, nil, nil, nil, fmt.Errorf("error loading digger.yml: %v", err)
 	}
 
-	log.Printf("Digger config loadded successfully\n")
-	return diggerYmlStr, ghService, config, dependencyGraph, &prBranch, &prCommitSha, nil
+	return diggerYmlStr, ghService, config, dependencyGraph, &prBranch, &prCommitSha, changedFiles, nil
+}
+
+func retrieveConfigFromCache(orgId uint, repoFullName string) (string, *dg_configuration.DiggerConfig, *graph.Graph[string, dg_configuration.Project], error) {
+	repoCache, err := models.DB.GetRepoCache(orgId, repoFullName)
+	if err != nil {
+		log.Printf("Error: failed to load repoCache, going to try live load %v", err)
+		return "", nil, nil, fmt.Errorf("")
+	}
+	var config dg_configuration.DiggerConfig
+	err = json.Unmarshal(repoCache.DiggerConfig, &config)
+	if err != nil {
+		log.Printf("Error: failed to load repoCache unmarshall config %v", err)
+		return "", nil, nil, fmt.Errorf("failed to load repoCache unmarshall config %v", err)
+	}
+
+	projectsGraph, err := dg_configuration.CreateProjectDependencyGraph(config.Projects)
+	if err != nil {
+		log.Printf("error retrieving graph of dependencies: %v", err)
+		return "", nil, nil, fmt.Errorf("error retrieving graph of dependencies: %v", err)
+	}
+
+	return repoCache.DiggerYmlStr, &config, &projectsGraph, nil
 }
 
 func GetRepoByInstllationId(installationId int64, repoOwner string, repoName string) (*models.Repo, error) {
@@ -641,7 +683,7 @@ func getBatchType(jobs []orchestrator_scheduler.Job) orchestrator_scheduler.Digg
 	}
 }
 
-func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.IssueCommentEvent, ciBackendProvider ci_backends.CiBackendProvider, appId int64) error {
+func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.IssueCommentEvent, ciBackendProvider ci_backends.CiBackendProvider, appId int64, postCommentHooks []IssueCommentHook) error {
 	installationId := *payload.Installation.ID
 	repoName := *payload.Repo.Name
 	repoOwner := *payload.Repo.Owner.Login
@@ -654,6 +696,10 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 	commentBody := *payload.Comment.Body
 	defaultBranch := *payload.Repo.DefaultBranch
 	isPullRequest := payload.Issue.IsPullRequest()
+	labels := payload.Issue.Labels
+	prLabelsStr := lo.Map(labels, func(label *github.Label, i int) string {
+		return *label.Name
+	})
 
 	if !isPullRequest {
 		log.Printf("comment not on pullrequest, ignroning")
@@ -691,7 +737,7 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 		}
 	}
 
-	diggerYmlStr, ghService, config, projectsGraph, branch, commitSha, err := getDiggerConfigForPR(gh, installationId, repoFullName, repoOwner, repoName, cloneURL, issueNumber)
+	diggerYmlStr, ghService, config, projectsGraph, branch, commitSha, changedFiles, err := getDiggerConfigForPR(gh, orgId, prLabelsStr, installationId, repoFullName, repoOwner, repoName, cloneURL, issueNumber)
 	if err != nil {
 		commentReporterManager.UpdateComment(fmt.Sprintf(":x: Could not load digger config, error: %v", err))
 		log.Printf("getDiggerConfigForPR error: %v", err)
@@ -737,6 +783,32 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 	}
 	log.Printf("GitHub IssueComment event processed successfully\n")
 
+	jobs, _, err := generic.ConvertIssueCommentEventToJobs(repoFullName, actor, issueNumber, commentBody, impactedProjects, requestedProject, config.Workflows, prBranchName, defaultBranch)
+	if err != nil {
+		log.Printf("Error converting event to jobs: %v", err)
+		commentReporterManager.UpdateComment(fmt.Sprintf(":x: Error converting event to jobs: %v", err))
+		return fmt.Errorf("error converting event to jobs")
+	}
+	log.Printf("GitHub IssueComment event converted to Jobs successfully\n")
+
+	// if flag set we dont allow more projects impacted than the number of changed files in PR (safety check)
+	if config2.LimitByNumOfFilesChanged() {
+		if len(impactedProjects) > len(changedFiles) {
+			log.Printf("Error the number impacted projects %v exceeds number of changed files: %v", len(impactedProjects), len(changedFiles))
+			commentReporterManager.UpdateComment(fmt.Sprintf(":x: Error the number impacted projects %v exceeds number of changed files: %v", len(impactedProjects), len(changedFiles)))
+			log.Printf("Information about the event:")
+			log.Printf("GH payload: %v", payload)
+			log.Printf("PR changed files: %v", changedFiles)
+			log.Printf("digger.yml STR: %v", diggerYmlStr)
+			log.Printf("Parsed config: %v", config)
+			log.Printf("Dependency graph:")
+			spew.Dump(projectsGraph)
+			log.Printf("Impacted Projects: %v", impactedProjects)
+			log.Printf("Impacted Project jobs: %v", jobs)
+			return fmt.Errorf("error processing event")
+		}
+	}
+
 	// perform unlocking in backend
 	if config.PrLocks {
 		for _, project := range impactedProjects {
@@ -764,14 +836,6 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 		commentReporterManager.UpdateComment(fmt.Sprintf(":white_check_mark: Command %v completed successfully", *diggerCommand))
 		return nil
 	}
-
-	jobs, _, err := generic.ConvertIssueCommentEventToJobs(repoFullName, actor, issueNumber, commentBody, impactedProjects, requestedProject, config.Workflows, prBranchName, defaultBranch)
-	if err != nil {
-		log.Printf("Error converting event to jobs: %v", err)
-		commentReporterManager.UpdateComment(fmt.Sprintf(":x: Error converting event to jobs: %v", err))
-		return fmt.Errorf("error converting event to jobs")
-	}
-	log.Printf("GitHub IssueComment event converted to Jobs successfully\n")
 
 	err = utils.ReportInitialJobsStatus(commentReporter, jobs)
 	if err != nil {
@@ -870,6 +934,15 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 		log.Printf("TriggerDiggerJobs error: %v", err)
 		commentReporterManager.UpdateComment(fmt.Sprintf(":x: TriggerDiggerJobs error: %v", err))
 		return fmt.Errorf("error triggering Digger Jobs")
+	}
+
+	log.Printf("executing issue comment event post hooks:")
+	for _, hook := range postCommentHooks {
+		err := hook(gh, payload, ciBackendProvider)
+		if err != nil {
+			log.Printf("handleIssueCommentEvent post hook error: %v", err)
+			return fmt.Errorf("error during postevent hooks: %v", err)
+		}
 	}
 	return nil
 }
@@ -1128,7 +1201,7 @@ func (d DiggerController) GithubAppCallbackPage(c *gin.Context) {
 		repoFullName := *repo.FullName
 		repoOwner := strings.Split(*repo.FullName, "/")[0]
 		repoName := *repo.Name
-		repoUrl := fmt.Sprintf("https://github.com/%v", repoFullName)
+		repoUrl := fmt.Sprintf("https://%v/%v", utils.GetGithubHostname(), repoFullName)
 		_, err := models.DB.GithubRepoAdded(installationId64, *installation.AppID, *installation.Account.Login, *installation.Account.ID, repoFullName)
 		if err != nil {
 			log.Printf("github repos added error: %v", err)

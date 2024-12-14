@@ -28,12 +28,16 @@ func createTempDir() string {
 
 type action func(string) error
 
-func CloneGitRepoAndDoAction(repoUrl string, branch string, token string, action action) error {
+func CloneGitRepoAndDoAction(repoUrl string, branch string, commitHash string, token string, action action) error {
 	dir := createTempDir()
 	git := NewGitShellWithTokenAuth(dir, token)
 	err := git.Clone(repoUrl, branch)
 	if err != nil {
 		return err
+	}
+
+	if commitHash != "" {
+		git.Checkout(commitHash)
 	}
 
 	defer func() {
@@ -112,12 +116,8 @@ func (gh DiggerGithubRealClientProvider) Get(githubAppId int64, installationId i
 func (gh DiggerGithubRealClientProvider) FetchCredentials(githubAppId string) (string, string, string, string, error) {
 	clientId := os.Getenv("GITHUB_APP_CLIENT_ID")
 	clientSecret := os.Getenv("GITHUB_APP_CLIENT_SECRET")
-	webhookSecret := os.Getenv("GITHUB_APP_WEBHOOK_SECRET")
+	webhookSecret := os.Getenv("GITHUB_WEBHOOK_SECRET")
 	privateKeyb64 := os.Getenv("GITHUB_APP_PRIVATE_KEY_BASE64")
-
-	if clientId == "" || clientSecret == "" || webhookSecret == "" {
-		return "", "", "", "", fmt.Errorf("the values of GITHUB_APP_CLIENT_ID or GITHUB_APP_CLIENT_SECRET are not set")
-	}
 	return clientId, clientSecret, webhookSecret, privateKeyb64, nil
 }
 

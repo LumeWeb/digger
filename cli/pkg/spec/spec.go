@@ -43,6 +43,13 @@ func RunSpec(
 		usage.ReportErrorAndExit(spec.VCS.Actor, fmt.Sprintf("could not get backend api: %v", err), 1)
 	}
 
+	// for additional output reporting
+	diggerOutPath := os.Getenv("DIGGER_OUT")
+	if diggerOutPath == "" {
+		diggerOutPath = os.Getenv("RUNNER_TEMP") + "/digger-out.log"
+		os.Setenv("DIGGER_OUT", diggerOutPath)
+	}
+
 	if spec.Job.Commit != "" {
 		// checking out to the commit ID
 		log.Printf("fetching commit ID %v", spec.Job.Commit)
@@ -145,7 +152,7 @@ func RunSpec(
 
 	currentDir, err := os.Getwd()
 	if err != nil {
-		message := fmt.Sprintf("Failed to get current dir. %s", err)
+		message := fmt.Sprintf("Failed to get current dir. %v", err)
 		reportError(spec, backendApi, message, err)
 	}
 
@@ -154,12 +161,12 @@ func RunSpec(
 	if !allAppliesSuccess || err != nil {
 		serializedBatch, reportingError := backendApi.ReportProjectJobStatus(spec.VCS.RepoName, spec.Job.ProjectName, spec.JobId, "failed", time.Now(), nil, "", "", "", nil)
 		if reportingError != nil {
-			message := fmt.Sprintf("Failed run commands. %s", err)
+			message := fmt.Sprintf("Failed run commands. %v", err)
 			reportError(spec, backendApi, message, err)
 		}
 		commentUpdater.UpdateComment(serializedBatch.Jobs, serializedBatch.PrNumber, prService, commentId)
 		digger.UpdateAggregateStatus(serializedBatch, prService)
-		reportError(spec, backendApi, fmt.Sprintf("Failed to run commands. %s", err), err)
+		reportError(spec, backendApi, fmt.Sprintf("failed to run commands %v", err), err)
 	}
 	usage.ReportErrorAndExit(spec.VCS.RepoOwner, "Digger finished successfully", 0)
 

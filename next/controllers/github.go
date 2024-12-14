@@ -68,10 +68,13 @@ func (d DiggerController) GithubAppWebHook(c *gin.Context) {
 		if *event.Action == "deleted" {
 			err := handleInstallationDeletedEvent(event)
 			if err != nil {
-				c.String(http.StatusInternalServerError, "Failed to handle webhook event.")
+				log.Printf("Failed to handle webhook event. %v", err)
 				return
 			}
 		}
+
+		c.String(http.StatusAccepted, "ok")
+		return
 
 	case *github.IssueCommentEvent:
 		log.Printf("IssueCommentEvent, action: %v\n", *event.Action)
@@ -80,17 +83,19 @@ func (d DiggerController) GithubAppWebHook(c *gin.Context) {
 		err := handlePullRequestEvent(gh, event, d.CiBackendProvider)
 		if err != nil {
 			log.Printf("handlePullRequestEvent error: %v", err)
-			c.String(http.StatusInternalServerError, err.Error())
-			return
 		}
+		c.String(http.StatusAccepted, "ok")
+		return
+
 	case *github.PushEvent:
 		log.Printf("Got push event for %d", event.Repo.URL)
 		handlePushEventApplyAfterMerge(gh, event)
 		if err != nil {
 			log.Printf("handlePushEvent error: %v", err)
-			c.String(http.StatusInternalServerError, err.Error())
-			return
 		}
+		c.String(http.StatusAccepted, "ok")
+		return
+
 	default:
 		log.Printf("Unhandled event, event type %v", reflect.TypeOf(event))
 	}
@@ -357,6 +362,11 @@ func handlePullRequestEvent(gh next_utils.GithubClientProvider, payload *github.
 	}
 
 	projectsGraph, err := dg_configuration.CreateProjectDependencyGraph(dgprojects)
+	workflows, err := services.GetWorkflowsForRepoAndBranch(gh, repo.ID, sourceBranch, commitSha)
+	if err != nil {
+		log.Printf("error getting workflows from config: %v", err)
+		return fmt.Errorf("error getting workflows from config")
+	}
 	var config *dg_configuration.DiggerConfig = &dg_configuration.DiggerConfig{
 		ApplyAfterMerge:   true,
 		AllowDraftPRs:     false,
@@ -364,23 +374,11 @@ func handlePullRequestEvent(gh next_utils.GithubClientProvider, payload *github.
 		DependencyConfiguration: dg_configuration.DependencyConfiguration{
 			Mode: dg_configuration.DependencyConfigurationHard,
 		},
-		PrLocks:   false,
-		Projects:  dgprojects,
-		AutoMerge: false,
-		Telemetry: false,
-		Workflows: map[string]dg_configuration.Workflow{
-			"default": dg_configuration.Workflow{
-				EnvVars: nil,
-				Plan:    nil,
-				Apply:   nil,
-				Configuration: &dg_configuration.WorkflowConfiguration{
-					OnPullRequestPushed:           []string{"digger plan"},
-					OnPullRequestClosed:           []string{},
-					OnPullRequestConvertedToDraft: []string{},
-					OnCommitToDefault:             []string{},
-				},
-			},
-		},
+		PrLocks:                    false,
+		Projects:                   dgprojects,
+		AutoMerge:                  false,
+		Telemetry:                  false,
+		Workflows:                  workflows,
 		MentionDriftedProjectsInPR: false,
 		TraverseToNestedProjects:   false,
 	}
@@ -540,7 +538,7 @@ func getDiggerConfigForBranch(gh next_utils.GithubClientProvider, installationId
 		log.Printf("Error getting changed files: %v", err)
 		return "", nil, nil, nil, fmt.Errorf("error getting changed files")
 	}
-	err = backend_utils.CloneGitRepoAndDoAction(cloneUrl, branch, *token, func(dir string) error {
+	err = backend_utils.CloneGitRepoAndDoAction(cloneUrl, branch, "", *token, func(dir string) error {
 		diggerYmlBytes, err := os.ReadFile(path.Join(dir, "digger.yml"))
 		diggerYmlStr = string(diggerYmlBytes)
 		config, _, dependencyGraph, err = dg_configuration.LoadDiggerConfig(dir, true, changedFiles)

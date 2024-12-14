@@ -30,6 +30,30 @@ type FileSystemTerragruntDirWalker struct {
 type FileSystemModuleDirWalker struct {
 }
 
+func CheckOrCreateDiggerFile(dir string) error {
+	// Check for digger.yml
+	ymlPath := filepath.Join(dir, "digger.yml")
+	yamlPath := filepath.Join(dir, "digger.yaml")
+
+	// Check if either file exists
+	if _, err := os.Stat(ymlPath); err == nil {
+		return nil // digger.yml exists
+	}
+	if _, err := os.Stat(yamlPath); err == nil {
+		return nil // digger.yaml exists
+	}
+
+	// Neither file exists, create digger.yml
+	file, err := os.Create(ymlPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// File is created empty by default
+	return nil
+}
+
 func GetFilesWithExtension(workingDir string, ext string) ([]string, error) {
 	var files []string
 	listOfFiles, err := os.ReadDir(workingDir)
@@ -243,12 +267,12 @@ func HandleYamlProjectGeneration(config *DiggerConfigYaml, terraformDir string, 
 				if MatchIncludeExcludePatternsToFile(dir, includePatterns, excludePatterns) {
 					projectName := strings.ReplaceAll(dir, "/", "_")
 					project := ProjectYaml{
-						Name:            projectName,
-						Dir:             dir,
-						Workflow:        defaultWorkflowName,
-						Workspace:       "default",
-						AwsRoleToAssume: config.GenerateProjectsConfig.AwsRoleToAssume,
-						Generated:       true,
+						Name:                 projectName,
+						Dir:                  dir,
+						Workflow:             defaultWorkflowName,
+						Workspace:            "default",
+						AwsRoleToAssume:      config.GenerateProjectsConfig.AwsRoleToAssume,
+						Generated:            true,
 						AwsCognitoOidcConfig: config.GenerateProjectsConfig.AwsCognitoOidcConfig,
 					}
 					config.Projects = append(config.Projects, &project)
@@ -272,13 +296,13 @@ func HandleYamlProjectGeneration(config *DiggerConfigYaml, terraformDir string, 
 						}
 
 						tgParsingConfig := TerragruntParsingConfig{
-							CreateProjectName: 	  true,
-							DefaultWorkflow:   	  workflow,
-							WorkflowFile:      	  b.WorkflowFile,
-							FilterPath:        	  path.Join(terraformDir, *b.RootDir),
-							AwsRoleToAssume:   	  b.AwsRoleToAssume,
+							CreateProjectName:    true,
+							DefaultWorkflow:      workflow,
+							WorkflowFile:         b.WorkflowFile,
+							FilterPath:           path.Join(terraformDir, *b.RootDir),
+							AwsRoleToAssume:      b.AwsRoleToAssume,
 							AwsCognitoOidcConfig: b.AwsCognitoOidcConfig,
-						};						
+						}
 
 						err := hydrateDiggerConfigYamlWithTerragrunt(config, tgParsingConfig, terraformDir)
 						if err != nil {
@@ -294,19 +318,26 @@ func HandleYamlProjectGeneration(config *DiggerConfigYaml, terraformDir string, 
 						workflow = b.Workflow
 					}
 
+					workspace := "default"
+					if b.Workspace != "" {
+						workspace = b.Workspace
+					}
+
 					for _, dir := range dirs {
 						if MatchIncludeExcludePatternsToFile(dir, includePatterns, excludePatterns) {
 							projectName := strings.ReplaceAll(dir, "/", "_")
 							project := ProjectYaml{
-								Name:            projectName,
-								Dir:             dir,
-								Workflow:        workflow,
-								Workspace:       "default",
-								OpenTofu:        b.OpenTofu,
-								AwsRoleToAssume: b.AwsRoleToAssume,
-								Generated:       true,
+								Name:                 projectName,
+								Dir:                  dir,
+								Workflow:             workflow,
+								Workspace:            workspace,
+								OpenTofu:             b.OpenTofu,
+								AwsRoleToAssume:      b.AwsRoleToAssume,
+								Generated:            true,
 								AwsCognitoOidcConfig: b.AwsCognitoOidcConfig,
-								WorkflowFile:    b.WorkflowFile,
+								WorkflowFile:         b.WorkflowFile,
+								IncludePatterns:      b.IncludePatterns,
+								ExcludePatterns:      b.ExcludePatterns,
 							}
 							config.Projects = append(config.Projects, &project)
 						}
@@ -356,9 +387,6 @@ func LoadDiggerConfigYaml(workingDir string, generateProjects bool, changedFiles
 }
 
 func ValidateDiggerConfigYaml(configYaml *DiggerConfigYaml, fileName string) error {
-	if (configYaml.Projects == nil || len(configYaml.Projects) == 0) && configYaml.GenerateProjectsConfig == nil {
-		return fmt.Errorf("no projects digger_config found in '%s'", fileName)
-	}
 	if configYaml.DependencyConfiguration != nil {
 		if configYaml.DependencyConfiguration.Mode != DependencyConfigurationHard && configYaml.DependencyConfiguration.Mode != DependencyConfigurationSoft {
 			return fmt.Errorf("dependency digger_config mode can only be '%s' or '%s'", DependencyConfigurationHard, DependencyConfigurationSoft)
@@ -508,6 +536,7 @@ func hydrateDiggerConfigYamlWithTerragrunt(configYaml *DiggerConfigYaml, parsing
 		parsingConfig.PreserveProjects,
 		parsingConfig.UseProjectMarkers,
 		executionOrderGroups,
+		parsingConfig.TriggerProjectsFromDirOnly,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to autogenerate digger_config, error during parse: %v", err)
@@ -533,20 +562,21 @@ func hydrateDiggerConfigYamlWithTerragrunt(configYaml *DiggerConfigYaml, parsing
 		// normalize paths
 		projectDir := path.Join(pathPrefix, atlantisProject.Dir)
 		atlantisProject.Autoplan.WhenModified, err = GetPatternsRelativeToRepo(projectDir, atlantisProject.Autoplan.WhenModified)
+
 		if err != nil {
 			return fmt.Errorf("could not normalize patterns: %v", err)
 		}
 
 		configYaml.Projects = append(configYaml.Projects, &ProjectYaml{
-			Name:            atlantisProject.Name,
-			Dir:             projectDir,
-			Workspace:       atlantisProject.Workspace,
-			Terragrunt:      true,
-			Workflow:        atlantisProject.Workflow,
-			WorkflowFile:    workflowFile,
-			IncludePatterns: atlantisProject.Autoplan.WhenModified,
-			Generated:       true,
-			AwsRoleToAssume: parsingConfig.AwsRoleToAssume,
+			Name:                 atlantisProject.Name,
+			Dir:                  projectDir,
+			Workspace:            atlantisProject.Workspace,
+			Terragrunt:           true,
+			Workflow:             atlantisProject.Workflow,
+			WorkflowFile:         workflowFile,
+			IncludePatterns:      atlantisProject.Autoplan.WhenModified,
+			Generated:            true,
+			AwsRoleToAssume:      parsingConfig.AwsRoleToAssume,
 			AwsCognitoOidcConfig: parsingConfig.AwsCognitoOidcConfig,
 		})
 	}
