@@ -74,7 +74,7 @@ if [[ "${DEBUG}" == "true" ]]; then\n\
 else\n\
     # Normal execution\n\
     exec /app/entrypoint.sh\n\
-fi' > /app/debug-entrypoint.sh && chmod +x /app/debug-entrypoint.sh
+fi' > /app/debug-entrypoint.sh && chmod +x /app/debug-entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # Use the new entrypoint script
 ENTRYPOINT ["/app/debug-entrypoint.sh"]
