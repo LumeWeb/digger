@@ -28,6 +28,7 @@ RUN go build -mod=vendor -gcflags="all=-N -l" -ldflags="-X 'main.Version=${COMMI
 # Multi-stage build will just copy the binary to an alpine image.
 FROM ubuntu:24.04 as runner
 ENV ATLAS_VERSION v0.28.0
+ENV PATH="${PATH}:/usr/local/bin"
 ARG COMMIT_SHA
 WORKDIR /app
 
