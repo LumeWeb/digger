@@ -57,19 +57,7 @@ RUN printf '#!/bin/bash\n\
 set -e\n\
 \n\
 if [[ "${DEBUG}" == "true" ]]; then\n\
-    # Run migrations first without debugging\n\
-    cd /app\n\
-    if [[ -z "${BASELINE_MIGRATION}" ]]; then\n\
-        if [[ "${ALLOW_DIRTY}" == "true" ]]; then\n\
-            atlas migrate apply --url $DATABASE_URL --allow-dirty\n\
-        else\n\
-            atlas migrate apply --url $DATABASE_URL\n\
-        fi\n\
-    else\n\
-        atlas migrate apply --url $DATABASE_URL --baseline $BASELINE_MIGRATION\n\
-    fi\n\
-    \n\
-    # Then debug only the backend\n\
+    # Run delve debugger\n\
     cd /app && exec dlv debug --headless --listen=:40000 --api-version=2 --accept-multiclient --continue\n\
 else\n\
     # Normal execution\n\
