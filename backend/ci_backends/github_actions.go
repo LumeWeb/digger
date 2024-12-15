@@ -23,9 +23,13 @@ func (g GithubActionCi) TriggerWorkflow(spec spec.Spec, runName string, vcsToken
 		RunName: runName,
 	}
 
+	inputsMap := inputs.ToMap()
+	prettyInputs, _ := json.MarshalIndent(inputsMap, "", "    ")
+	log.Printf("Workflow inputs: %s", string(prettyInputs))
+
 	_, err = client.Actions.CreateWorkflowDispatchEventByFileName(context.Background(), spec.VCS.RepoOwner, spec.VCS.RepoName, spec.VCS.WorkflowFile, github.CreateWorkflowDispatchEventRequest{
 		Ref:    spec.Job.Branch,
-		Inputs: inputs.ToMap(),
+		Inputs: inputsMap,
 	})
 
 	return err
