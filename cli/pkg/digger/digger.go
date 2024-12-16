@@ -833,53 +833,47 @@ func setupEnvironment(job *orchestrator.Job) error {
 	if job.CommandEnvVars == nil {
 		job.CommandEnvVars = make(map[string]string)
 	}
-
+	
 	// Handle SECRETS_CONTEXT
 	if secretsJson := os.Getenv("SECRETS_CONTEXT"); secretsJson != "" {
 		var secrets map[string]interface{}
 		if err := json.Unmarshal([]byte(secretsJson), &secrets); err != nil {
 			return fmt.Errorf("failed to parse SECRETS_CONTEXT: %w", err)
 		}
-		log.Println("Setting SECRETS_CONTEXT")
 		for k, v := range secrets {
 			job.CommandEnvVars[k] = fmt.Sprintf("%v", v)
-			log.Printf("Setting %s", k)
 		}
 	}
-
-	// Handle VARIABLES_CONTEXT
+	
+	// Handle VARIABLES_CONTEXT 
 	if varsJson := os.Getenv("VARIABLES_CONTEXT"); varsJson != "" {
 		var vars map[string]interface{}
 		if err := json.Unmarshal([]byte(varsJson), &vars); err != nil {
 			return fmt.Errorf("failed to parse VARIABLES_CONTEXT: %w", err)
 		}
-		log.Println("Setting VARIABLES_CONTEXT")
 		for k, v := range vars {
 			job.CommandEnvVars[k] = fmt.Sprintf("%v", v)
-			log.Printf("Setting %s to %s", k, job.CommandEnvVars[k])
 		}
 	}
 
 	// Handle TF_VAR_ environment variables
 	newEnvVars := make(map[string]string)
-	log.Println("Setting TF_VAR_'s")
 	for k, v := range job.CommandEnvVars {
 		if strings.HasPrefix(k, "TF_VAR_") {
 			// Create lowercase version
 			lowercaseKey := "TF_VAR_" + strings.ToLower(strings.TrimPrefix(k, "TF_VAR_"))
-
+			
 			// Only add if lowercase version doesn't exist
 			if _, exists := job.CommandEnvVars[lowercaseKey]; !exists {
 				newEnvVars[lowercaseKey] = v
-				log.Printf("Setting %s to %s", lowercaseKey, v)
 			}
 		}
 	}
-
+	
 	// Add the new lowercase variables
 	for k, v := range newEnvVars {
 		job.CommandEnvVars[k] = v
 	}
-
+	
 	return nil
 }
