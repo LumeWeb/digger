@@ -1,7 +1,6 @@
 package digger
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/diggerhq/digger/libs/backendapi"
@@ -75,12 +74,6 @@ func RunJobs(jobs []orchestrator.Job, prService ci.PullRequestService, orgServic
 	appliesPerProject := make(map[string]bool)
 
 	for i, job := range jobs {
-		// Setup environment variables before job execution
-		if err := setupEnvironment(&job); err != nil {
-			log.Printf("Failed to setup environment for job %s: %v", job.ProjectName, err)
-			return false, false, err
-		}
-
 		splits := strings.Split(job.Namespace, "/")
 		SCMOrganisation := splits[0]
 		SCMrepository := splits[1]
@@ -826,54 +819,4 @@ func MergePullRequest(ciService ci.PullRequestService, prNumber int) {
 	} else {
 		log.Printf("PR is already merged, skipping merge step")
 	}
-}
-
-func setupEnvironment(job *orchestrator.Job) error {
-	// Initialize CommandEnvVars if nil
-	if job.CommandEnvVars == nil {
-		job.CommandEnvVars = make(map[string]string)
-	}
-	
-	// Handle SECRETS_CONTEXT
-	if secretsJson := os.Getenv("SECRETS_CONTEXT"); secretsJson != "" {
-		var secrets map[string]interface{}
-		if err := json.Unmarshal([]byte(secretsJson), &secrets); err != nil {
-			return fmt.Errorf("failed to parse SECRETS_CONTEXT: %w", err)
-		}
-		for k, v := range secrets {
-			job.CommandEnvVars[k] = fmt.Sprintf("%v", v)
-		}
-	}
-	
-	// Handle VARIABLES_CONTEXT 
-	if varsJson := os.Getenv("VARIABLES_CONTEXT"); varsJson != "" {
-		var vars map[string]interface{}
-		if err := json.Unmarshal([]byte(varsJson), &vars); err != nil {
-			return fmt.Errorf("failed to parse VARIABLES_CONTEXT: %w", err)
-		}
-		for k, v := range vars {
-			job.CommandEnvVars[k] = fmt.Sprintf("%v", v)
-		}
-	}
-
-	// Handle TF_VAR_ environment variables
-	newEnvVars := make(map[string]string)
-	for k, v := range job.CommandEnvVars {
-		if strings.HasPrefix(k, "TF_VAR_") {
-			// Create lowercase version
-			lowercaseKey := "TF_VAR_" + strings.ToLower(strings.TrimPrefix(k, "TF_VAR_"))
-			
-			// Only add if lowercase version doesn't exist
-			if _, exists := job.CommandEnvVars[lowercaseKey]; !exists {
-				newEnvVars[lowercaseKey] = v
-			}
-		}
-	}
-	
-	// Add the new lowercase variables
-	for k, v := range newEnvVars {
-		job.CommandEnvVars[k] = v
-	}
-	
-	return nil
 }
