@@ -103,6 +103,20 @@ func (d DiggerController) GithubAppWebHook(c *gin.Context) {
 		log.Printf("Got pull request event for %d", *event.PullRequest.ID)
 		// run it as a goroutine to avoid timeouts
 		go handlePullRequestEvent(gh, event, d.CiBackendProvider, appId64)
+	case *github.PushEvent:
+		log.Printf("Got push event for %s", *event.Repo.FullName)
+		link, err := models.DB.GetGithubInstallationLinkForInstallationId(*event.Installation.ID)
+		if err != nil {
+			log.Printf("Error getting installation link: %v", err)
+			c.String(http.StatusInternalServerError, "Error processing webhook")
+			return
+		}
+		err = handleGithubPushEvent(gh, event, link.OrganisationId)
+		if err != nil {
+			log.Printf("Error handling push event: %v", err)
+			c.String(http.StatusInternalServerError, "Error processing webhook")
+			return
+		}
 	default:
 		log.Printf("Unhandled event, event type %v", reflect.TypeOf(event))
 	}
@@ -1334,4 +1348,103 @@ func validateGithubCallback(githubClientProvider utils.GithubClientProvider, cli
 	}
 
 	return true, matchedInstallation, nil
+}
+
+func handleGithubPushEvent(gh utils.GithubClientProvider, payload *github.PushEvent, organisationId uint) error {
+	repoFullName := *payload.Repo.FullName
+	repoOwner := *payload.Repo.Owner.Login
+	repoName := *payload.Repo.Name
+	cloneURL := *payload.Repo.CloneURL
+	webURL := *payload.Repo.HTMLURL
+	ref := *payload.Ref
+	defaultBranch := *payload.Repo.DefaultBranch
+
+	pushBranch := ""
+	if strings.HasPrefix(ref, "refs/heads/") {
+		pushBranch = strings.TrimPrefix(ref, "refs/heads/")
+	} else {
+		log.Printf("push was not to a branch, ignoring %v", ref)
+		return nil
+	}
+
+	diggerRepoName := strings.ReplaceAll(repoFullName, "/", "-")
+
+	// Get or create repo
+	org, err := models.DB.GetOrganisationById(organisationId)
+	if err != nil {
+		log.Printf("Error: could not get organisation: %v", err)
+		return fmt.Errorf("failed to get organisation: %w", err)
+	}
+
+	repo, err := models.DB.CreateRepo(diggerRepoName, repoFullName, repoOwner, repoName, webURL, org, "")
+	if err != nil {
+		log.Printf("Error: could not create repo: %v", err)
+		return fmt.Errorf("failed to create repo: %w", err)
+	}
+
+	// Get GitHub token for the installation
+	_, token, err := utils.GetGithubService(gh, *payload.Installation.ID, repoFullName, repoOwner, repoName)
+	if err != nil {
+		log.Printf("Error getting github service: %v", err)
+		return fmt.Errorf("failed to get github service: %w", err)
+	}
+
+	var isMainBranch bool
+	if strings.HasSuffix(ref, defaultBranch) {
+		isMainBranch = true
+	} else {
+		isMainBranch = false
+	}
+
+	// Clone repo and process digger.yml
+	err = utils.CloneGitRepoAndDoAction(cloneURL, pushBranch, "", *token, func(dir string) error {
+		config, err := dg_configuration.LoadDiggerConfigYaml(dir, true, nil)
+		if err != nil {
+			log.Printf("ERROR load digger.yml: %v", err)
+			return fmt.Errorf("error loading digger.yml %v", err)
+		}
+
+		// Create/update projects based on digger.yml
+		for _, project := range config.Projects {
+			existingProjects, err := models.DB.GetProjectByRepo(organisationId, repo)
+			if err != nil {
+				return fmt.Errorf("failed to check existing projects: %w", err)
+			}
+
+			// Check if project already exists
+			projectExists := false
+			for _, existingProject := range existingProjects {
+				if existingProject.Name == project.Name {
+					projectExists = true
+					break
+				}
+			}
+
+			if !projectExists {
+				newProject := &models.Project{
+					Name:           project.Name,
+					OrganisationID: organisationId,
+					RepoID:         repo.ID,
+					Status:         models.ProjectActive,
+					Organisation:   org,
+					Repo:           repo,
+				}
+				err = models.DB.GormDB.Create(newProject).Error
+				if err != nil {
+					return fmt.Errorf("failed to create project: %w", err)
+				}
+			}
+		}
+
+		err = models.DB.UpdateRepoDiggerConfig(organisationId, *config, repo, isMainBranch)
+		if err != nil {
+			return fmt.Errorf("failed to update repo config: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("error while cloning repo: %w", err)
+	}
+
+	return nil
 }
