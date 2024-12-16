@@ -2,29 +2,33 @@ FROM golang:1.22 as builder
 ARG COMMIT_SHA
 RUN echo "commit sha: ${COMMIT_SHA}"
 
-# Set the working directory
+# Set the working directory and ensure we're in the right directory structure
 WORKDIR $GOPATH/src/github.com/diggerhq/digger
+
+# Install Delve debugger
+RUN go install github.com/go-delve/delve/cmd/dlv@latest
 
 # Copy all required source, blacklist files that are not required through `.dockerignore`
 COPY . .
-
-# Get the vendor library
+# Get the vendor library and version
 RUN go version
+ENV GOWORK=off
+# Run these from the backend directory
+WORKDIR $GOPATH/src/github.com/diggerhq/digger/backend
+RUN go mod download
+RUN go mod vendor
 
-# RUN vgo install
-
-# https://github.com/ethereum/go-ethereum/issues/2738
-# Build static binary "-getmode=vendor" does not work with go-ethereum
-
-RUN go build -ldflags="-X 'main.Version=${COMMIT_SHA}'" -o backend_exe ./backend/
+# Build with debug symbols instead of optimizations
+RUN go build -mod=vendor -gcflags="all=-N -l" -ldflags="-X 'main.Version=${COMMIT_SHA}'" -o backend_exe .
 
 # Multi-stage build will just copy the binary to an alpine image.
 FROM ubuntu:24.04 as runner
 ENV ATLAS_VERSION v0.28.0
+ENV PATH="${PATH}:/usr/local/bin"
 ARG COMMIT_SHA
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y ca-certificates curl && apt-get install -y git && apt-get clean all
+RUN apt-get update && apt-get install -y ca-certificates curl git && apt-get clean all
 RUN update-ca-certificates
 
 RUN echo "commit sha: ${COMMIT_SHA}"
@@ -32,19 +36,42 @@ RUN echo "commit sha: ${COMMIT_SHA}"
 # install atlas
 RUN curl -sSf https://atlasgo.sh | sh
 
+# Copy Delve from builder
+COPY --from=builder /go/bin/dlv /usr/local/bin/dlv
 
+# Expose the application and debugger ports
+EXPOSE 3000 40000
 
-# Set gin to production
-#ENV GIN_MODE=release
-
-# Expose the running port
-EXPOSE 3000
-
-# Copy the binary to the corresponding folder
-COPY --from=builder /go/src/github.com/diggerhq/digger/backend_exe /app/backend
+# Copy the binary and source code for debugging
+COPY --from=builder /go/src/github.com/diggerhq/digger/backend/backend_exe /app/backend
 COPY --from=builder /go/src/github.com/diggerhq/digger/backend/scripts/entrypoint.sh /app/entrypoint.sh
 COPY --from=builder /go/src/github.com/diggerhq/digger/backend/migrations /app/migrations
+COPY --from=builder /go/src/github.com/diggerhq/digger/backend/vendor /app/vendor
 ADD backend/templates ./templates
 
-# Run the binary
-ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]
+# Create debug entrypoint script
+RUN printf '#!/bin/bash\n\
+set -e\n\
+\n\
+if [[ "${DEBUG}" == "true" ]]; then\n\
+    # Run migrations first without debugging\n\
+    cd /app\n\
+    if [[ -z "${BASELINE_MIGRATION}" ]]; then\n\
+        if [[ "${ALLOW_DIRTY}" == "true" ]]; then\n\
+            atlas migrate apply --url $DATABASE_URL --allow-dirty\n\
+        else\n\
+            atlas migrate apply --url $DATABASE_URL\n\
+        fi\n\
+    else\n\
+        atlas migrate apply --url $DATABASE_URL --baseline $BASELINE_MIGRATION\n\
+    fi\n\
+    \n\
+    # Then debug only the backend\n\
+    cd /app && dlv exec --headless --listen=:2345 --api-version=2 --accept-multiclient ./backend \n\
+else\n\
+    # Normal execution\n\
+    exec /app/entrypoint.sh\n\
+fi' > /app/debug-entrypoint.sh && chmod +x /app/debug-entrypoint.sh && chmod +x /app/entrypoint.sh
+
+# Use the new entrypoint script
+ENTRYPOINT ["/app/debug-entrypoint.sh"]
