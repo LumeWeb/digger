@@ -50,16 +50,19 @@ func ProcessIssueCommentEvent(prNumber int, commentBody string, diggerConfig *di
 }
 
 func FindAllProjectsDependantOnImpactedProjects(impactedProjects []digger_config.Project, dependencyGraph graph.Graph[string, digger_config.Project]) ([]digger_config.Project, error) {
-	impactedProjectsMap := make(map[string]digger_config.Project)
+	// Start with all originally impacted projects
+	resultMap := make(map[string]digger_config.Project)
 	for _, project := range impactedProjects {
-		impactedProjectsMap[project.Name] = project
+		resultMap[project.Name] = project
 	}
+
 	visited := make(map[string]bool)
 	predecessorMap, err := dependencyGraph.PredecessorMap()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get predecessor map")
 	}
-	impactedProjectsWithDependantProjects := make([]digger_config.Project, 0)
+
+	// Find projects that depend on impacted projects
 	for currentNode := range predecessorMap {
 		// find all roots of the graph
 		if len(predecessorMap[currentNode]) == 0 {
@@ -71,20 +74,12 @@ func FindAllProjectsDependantOnImpactedProjects(impactedProjects []digger_config
 				if _, ok := visited[node]; ok {
 					return true
 				}
-				// add a project if it was impacted
-				if _, ok := impactedProjectsMap[node]; ok {
-					impactedProjectsWithDependantProjects = append(impactedProjectsWithDependantProjects, currentProject)
-					visited[node] = true
-					return false
-				} else {
-					// if a project was not impacted, check if it has a parent that was impacted and add it to the map of impacted projects
-					for parent := range predecessorMap[node] {
-						if _, ok := impactedProjectsMap[parent]; ok {
-							impactedProjectsWithDependantProjects = append(impactedProjectsWithDependantProjects, currentProject)
-							impactedProjectsMap[node] = currentProject
-							visited[node] = true
-							return false
-						}
+				// if a project has a parent that was impacted, add it
+				for parent := range predecessorMap[node] {
+					if _, ok := resultMap[parent]; ok {
+						resultMap[node] = currentProject
+						visited[node] = true
+						return false
 					}
 				}
 				return true
@@ -94,7 +89,13 @@ func FindAllProjectsDependantOnImpactedProjects(impactedProjects []digger_config
 			}
 		}
 	}
-	return impactedProjectsWithDependantProjects, nil
+
+	// Convert result map to slice
+	result := make([]digger_config.Project, 0, len(resultMap))
+	for _, project := range resultMap {
+		result = append(result, project)
+	}
+	return result, nil
 }
 
 func ConvertIssueCommentEventToJobs(repoFullName string, requestedBy string, prNumber int, commentBody string, impactedProjects []digger_config.Project, requestedProject *digger_config.Project, workflows map[string]digger_config.Workflow, prBranchName string, defaultBranch string) ([]scheduler.Job, bool, error) {
@@ -189,8 +190,8 @@ func CreateJobsForProjects(projects []digger_config.Project, command string, eve
 			RequestedBy:        requestedBy,
 			StateEnvProvider:   StateEnvProvider,
 			CommandEnvProvider: CommandEnvProvider,
-			CommandRoleArn:    	cmdRole,
-			StateRoleArn:     	stateRole,
+			CommandRoleArn:     cmdRole,
+			StateRoleArn:       stateRole,
 			CognitoOidcConfig:  project.AwsCognitoOidcConfig,
 			SkipMergeCheck:     skipMerge,
 		})
